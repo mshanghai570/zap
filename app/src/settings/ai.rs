@@ -631,18 +631,32 @@ cfg_if! {
 // 自定义 Agent 提供商配置(进程内 Provider)
 // ---------------------------------------------------------------------------
 
-/// Agent 提供商支持的协议类型。
+/// Agent 提供商的执行类型。
 ///
-/// 第一阶段仅支持 OpenAI 兼容协议(适用于 OpenAI、DeepSeek、智谱 GLM、
+/// HTTP 提供商使用 OpenAI 兼容协议(适用于 OpenAI、DeepSeek、智谱 GLM、
 /// Moonshot、通义千问 DashScope-OpenAI 兼容端点、SiliconFlow、OpenRouter、
-/// 任何 OpenAI 兼容的本地服务等)。后续可在此扩展 Anthropic、Google、Bedrock。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+/// 任何 OpenAI 兼容的本地服务等);OpenCode CLI 则由本地进程执行。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum AgentProviderKind {
     /// OpenAI 兼容的 Chat Completions / `/v1/models` 协议。
     #[default]
     OpenAiCompatible,
+    /// 通过本地 OpenCode CLI 执行 Agent Mode 请求。
+    OpenCodeCli,
+}
+
+impl AgentProviderKind {
+    /// 设置 UI dropdown 显示文字。
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => "OpenAI Compatible",
+            Self::OpenCodeCli => "OpenCode CLI",
+        }
+    }
 }
 
 /// BYOP provider 实际使用的 API 协议类型 — 显式指定,
@@ -650,8 +664,7 @@ pub enum AgentProviderKind {
 /// `AdapterKind`,完全绕过"按模型名识别"的默认行为,避免误识别。
 ///
 /// **注意**:这是相对 [`AgentProviderKind`] 的更细粒度维度。
-/// `AgentProviderKind` 目前只有 `OpenAiCompatible`(语义"用户自管 endpoint"),
-/// `AgentProviderApiType` 决定 genai 用哪种原生协议序列化请求 / 解析响应。
+/// 仅 OpenAI 兼容 HTTP 提供商使用此值决定 genai 的请求/响应协议。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, schemars::JsonSchema,
 )]
@@ -804,8 +817,7 @@ pub struct AgentProvider {
     /// 用户给这个提供商起的显示名(例如 "DeepSeek 官方"、"本地 Ollama")。
     pub name: String,
 
-    /// 协议类型,目前固定为 OpenAI 兼容(语义"用户自管 endpoint")。
-    /// 实际请求/响应序列化协议由 [`AgentProvider::api_type`] 决定。
+    /// 提供商执行类型;HTTP 提供商的请求/响应协议由 [`AgentProvider::api_type`] 决定。
     #[serde(default)]
     pub kind: AgentProviderKind,
 
@@ -828,6 +840,10 @@ pub struct AgentProvider {
     /// `api_key` 仍走 `Authorization: Bearer` 标准路径。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_headers: Vec<(String, String)>,
+
+    /// OpenCode CLI 可执行文件路径;留空时从 `PATH` 中解析 `opencode`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_executable: Option<PathBuf>,
 }
 
 impl AgentProvider {
@@ -845,6 +861,7 @@ impl AgentProvider {
             base_url: String::new(),
             models: Vec::new(),
             extra_headers: Vec::new(),
+            cli_executable: None,
         }
     }
 }

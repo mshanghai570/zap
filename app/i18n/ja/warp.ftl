@@ -1445,7 +1445,7 @@ settings-update-environment-description-placeholder = 例: この環境はフロ
 # 此锚点下放 settings_view/agent_providers_widget.rs 字符串
 # 命名前缀:settings-agent-providers-*
 settings-agent-providers-title = エージェントプロバイダー
-settings-agent-providers-description = OpenAI 互換 (DeepSeek、Zhipu GLM、Moonshot、DashScope、SiliconFlow、OpenRouter など)、Anthropic、Gemini、ローカル Ollama など、複数プロトコルにまたがるカスタムエージェントプロバイダーを構成します。モデルは手動 (表示名 + モデル ID マッピング) または API から自動取得で追加できます。プロバイダーのメタデータはローカルの settings.toml に保存され、API キーはシステムキーチェーンに安全に保存されます。
+settings-agent-providers-description = OpenAI 互換、Anthropic、Gemini、ローカル Ollama などの HTTP API、または OpenCode CLI を使用するカスタムエージェントプロバイダーを構成します。HTTP モデルは手動追加または API から取得できます。OpenCode のモデル ID は手動で入力し、OpenCode のローカル認証を使用します。プロバイダーのメタデータはローカルの settings.toml に保存され、API キーはシステムキーチェーンに安全に保存されます。
 settings-agent-providers-empty = プロバイダーがまだ構成されていません。右上の [+ プロバイダー追加] をクリックして追加してください。
 settings-agent-providers-add-button = + プロバイダー追加
 settings-agent-providers-search-placeholder = プロバイダーを検索…
@@ -1459,6 +1459,14 @@ settings-agent-providers-collapse = 折りたたむ ▲
 settings-agent-providers-expand-remaining = 残り { $count } 件を展開 ▼
 settings-agent-providers-row-missing = (このプロバイダーに紐付くエディタはまだありません: { $id })
 settings-agent-providers-field-name = 名前
+settings-agent-providers-field-kind = プロバイダーの種類
+settings-agent-providers-kind-openai-compatible = OpenAI 互換 API
+settings-agent-providers-kind-opencode-cli = OpenCode CLI
+settings-agent-providers-field-cli-executable = 実行ファイルのパス
+settings-agent-providers-cli-executable-placeholder = opencode
+settings-agent-providers-cli-help = OpenCode のローカル認証を使用し、Zap に認証情報は保存されません。モデル ID は手動で追加してください。パスを空にすると PATH 上の `opencode` を使用します。
+settings-agent-providers-cli-model-id-placeholder = `opencode run --model` に渡すモデル ID
+settings-agent-providers-cli-models-empty-hint = モデルがまだ設定されていません。[+ モデル追加] をクリックして OpenCode のモデル ID を手動で追加してください。
 settings-agent-providers-field-base-url = ベース URL
 settings-agent-providers-field-api-key = API キー
 settings-agent-providers-field-api-type = API タイプ

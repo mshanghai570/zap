@@ -1485,7 +1485,7 @@ settings-update-environment-description-placeholder = 例如，这个环境适�
 
 # --- ANCHOR-SUB-AGENT-PROVIDERS (agent-settings-agent-providers) ---
 settings-agent-providers-title = Agent 提供商
-settings-agent-providers-description = 配置自定义 Agent 提供商，支持多协议 —— OpenAI 兼容（DeepSeek、智谱 GLM、Moonshot、通义千问 DashScope、SiliconFlow、OpenRouter 等）、Anthropic、Gemini、本地 Ollama。可以手动添加模型（显示名 + 模型 ID 映射），也可以从 API 自动抓取。提供商元数据存储在本地 settings.toml，API 密钥安全存储在系统密钥库。
+settings-agent-providers-description = 配置自定义 Agent 提供商，可使用 HTTP API（OpenAI 兼容、Anthropic、Gemini、本地 Ollama 等）或 OpenCode CLI。HTTP 模型可手动添加或从 API 抓取；OpenCode 模型 ID 需手动填写，并使用 OpenCode 的本地身份验证。提供商元数据存储在本地 settings.toml，API 密钥安全存储在系统密钥库。
 settings-agent-providers-empty = 尚未配置任何提供商。点击右上角 [+ 添加提供商] 按钮添加。
 settings-agent-providers-add-button = + 添加提供商
 settings-agent-providers-search-placeholder = 搜索提供商…
@@ -1499,6 +1499,14 @@ settings-agent-providers-collapse = 收起 ▲
 settings-agent-providers-expand-remaining = 展开剩余 { $count } 个 ▼
 settings-agent-providers-row-missing = （此提供商还未关联编辑器：{ $id }）
 settings-agent-providers-field-name = 名称
+settings-agent-providers-field-kind = 提供商类型
+settings-agent-providers-kind-openai-compatible = OpenAI 兼容 API
+settings-agent-providers-kind-opencode-cli = OpenCode CLI
+settings-agent-providers-field-cli-executable = 可执行文件路径
+settings-agent-providers-cli-executable-placeholder = opencode
+settings-agent-providers-cli-help = 使用 OpenCode 的本地身份验证；Zap 不会存储凭据。请手动添加模型 ID。路径留空时使用 PATH 中的 `opencode`。
+settings-agent-providers-cli-model-id-placeholder = 传递给 `opencode run --model` 的模型 ID
+settings-agent-providers-cli-models-empty-hint = 尚未配置模型。点击 [+ 添加模型] 手动添加 OpenCode 模型 ID。
 settings-agent-providers-field-base-url = 接口地址
 settings-agent-providers-field-api-key = API 密钥
 settings-agent-providers-field-api-type = API 协议

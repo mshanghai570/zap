@@ -40,6 +40,7 @@
 //! controller 自动接管。
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -3320,6 +3321,41 @@ pub struct ByopOutputInput {
     pub attachment_caps: attachment_caps::AttachmentCaps,
 }
 
+pub struct OpenCodeOutputInput {
+    pub params: RequestParams,
+    pub executable: PathBuf,
+    pub model_id: String,
+    pub task_id: String,
+    pub target_task_id: String,
+    pub needs_create_task: bool,
+    pub cancellation_rx: futures::channel::oneshot::Receiver<()>,
+}
+
+fn opencode_prompt(inputs: &[AIAgentInput]) -> Option<String> {
+    let prompt = inputs
+        .iter()
+        .filter_map(|input| match input {
+            AIAgentInput::InvokeSkill {
+                skill, user_query, ..
+            } => {
+                let mut prompt = format!(
+                    "Perform the task following the guidance of the skill \"{}\" below:\n\n{}\n\n---\n",
+                    skill.name, skill.content,
+                );
+                if let Some(user_query) = user_query {
+                    prompt.push_str(&format!("Further user instructions: {}", user_query.query));
+                }
+                Some(prompt)
+            }
+            _ => input.user_query(),
+        })
+        .filter(|prompt| !prompt.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    (!prompt.is_empty()).then_some(prompt)
+}
+
 /// `task_id`: conversation 的 root task id(controller 端从 history model 取)。
 /// `target_task_id`: 本轮模型输出应该写入的 task id;普通对话等于 root,
 /// CLI subagent 后续轮为已有 subtask。
@@ -4523,6 +4559,177 @@ pub async fn generate_byop_output(
     };
 
     Ok(Box::pin(stream))
+}
+
+/// Run OpenCode once and convert the completed result into the existing response event stream.
+pub async fn generate_opencode_output(
+    input: OpenCodeOutputInput,
+) -> Result<ResponseStream, ConvertToAPITypeError> {
+    let OpenCodeOutputInput {
+        params,
+        executable,
+        model_id,
+        task_id,
+        target_task_id,
+        needs_create_task,
+        cancellation_rx,
+    } = input;
+    let request_id = Uuid::new_v4().to_string();
+    let conversation_id = params
+        .conversation_token
+        .as_ref()
+        .map(|token| token.as_str().to_string())
+        .unwrap_or_default();
+    let working_directory = PathBuf::from(
+        params
+            .session_context
+            .current_working_directory()
+            .as_deref()
+            .unwrap_or("."),
+    );
+    let prompt = opencode_prompt(&params.input);
+
+    let stream = async_stream::stream! {
+        yield Ok(api::ResponseEvent {
+            r#type: Some(api::response_event::Type::Init(
+                api::response_event::StreamInit {
+                    request_id: request_id.clone(),
+                    conversation_id,
+                    run_id: String::new(),
+                },
+            )),
+        });
+
+        if needs_create_task {
+            yield Ok(create_task_event(&task_id));
+        }
+
+        let mut persistence_messages = Vec::new();
+        for input in &params.input {
+            match input {
+                AIAgentInput::UserQuery { query, context, .. } => {
+                    let attachments = user_context::collect_user_attachments(context);
+                    persistence_messages.push(make_user_query_message(
+                        &target_task_id,
+                        &request_id,
+                        query.clone(),
+                        &attachments.binaries,
+                    ));
+                }
+                AIAgentInput::ActionResult { result, .. } => {
+                    let content = tools::serialize_action_result(result).unwrap_or_else(|| {
+                        serde_json::json!({ "result": result.result.to_string() }).to_string()
+                    });
+                    persistence_messages.push(make_tool_call_result_message(
+                        &target_task_id,
+                        &request_id,
+                        result.id.to_string(),
+                        content,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if !persistence_messages.is_empty() {
+            yield Ok(make_add_messages_event(&target_task_id, persistence_messages));
+        }
+
+        let Some(prompt) = prompt else {
+            yield Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                "OpenCode CLI cannot handle this Zap request because it has no user prompt."
+            ))));
+            return;
+        };
+
+        let output = match super::opencode_cli::run_opencode(
+            super::opencode_cli::OpenCodeRunConfig {
+                executable,
+                model_id,
+                working_directory,
+                prompt,
+            },
+            cancellation_rx,
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(super::opencode_cli::OpenCodeCliError::Cancelled) => return,
+            Err(error) => {
+                yield Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                    "OpenCode CLI failed: {error}"
+                ))));
+                return;
+            }
+        };
+
+        if !output.is_empty() {
+            yield Ok(make_add_messages_event(
+                &target_task_id,
+                vec![make_agent_output_message(&target_task_id, &request_id, output)],
+            ));
+        }
+        yield Ok(make_finished_done(None));
+    };
+
+    Ok(Box::pin(stream))
+}
+
+#[cfg(test)]
+mod opencode_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn opencode_prompt_uses_user_queries() {
+        let prompt = opencode_prompt(&[AIAgentInput::UserQuery {
+            query: "Fix the parser".to_owned(),
+            context: Arc::from([]),
+            static_query_type: None,
+            referenced_attachments: std::collections::HashMap::new(),
+            user_query_mode: crate::ai::agent::UserQueryMode::Normal,
+            running_command: None,
+            intended_agent: None,
+        }]);
+
+        assert_eq!(prompt.as_deref(), Some("Fix the parser"));
+    }
+
+    #[test]
+    fn opencode_prompt_includes_skill_guidance_and_user_instructions() {
+        let prompt = opencode_prompt(&[AIAgentInput::InvokeSkill {
+            context: Arc::from([]),
+            skill: ai::skills::ParsedSkill {
+                path: PathBuf::from("/tmp/skill/SKILL.md"),
+                name: "test-skill".to_owned(),
+                description: "Test skill".to_owned(),
+                content: "# Follow these steps".to_owned(),
+                line_range: None,
+                provider: ai::skills::SkillProvider::Agents,
+                scope: ai::skills::SkillScope::Project,
+            },
+            user_query: Some(crate::ai::agent::InvokeSkillUserQuery {
+                query: "Run the checks".to_owned(),
+                referenced_attachments: std::collections::HashMap::new(),
+            }),
+        }]);
+
+        assert_eq!(
+            prompt.as_deref(),
+            Some(
+                "Perform the task following the guidance of the skill \"test-skill\" below:\n\n\
+                 # Follow these steps\n\n---\nFurther user instructions: Run the checks"
+            )
+        );
+    }
+
+    #[test]
+    fn opencode_prompt_rejects_internal_requests_without_user_query() {
+        let input = AIAgentInput::SummarizeConversation {
+            prompt: None,
+            overflow: false,
+        };
+
+        assert!(opencode_prompt(&[input]).is_none());
+    }
 }
 
 /// 用独立 BYOP 配置发一个短的非工具请求,让模型对首条 user query 生成会话标题。

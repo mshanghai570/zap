@@ -5,6 +5,7 @@ use crate::{
     test_util::settings::initialize_settings_for_tests,
 };
 use chrono::Utc;
+use std::path::PathBuf;
 use warpui::{App, SingletonEntity};
 
 fn create_test_request_limit_info(
@@ -760,6 +761,35 @@ fn extra_headers_backward_compat() {
 }
 
 #[test]
+fn opencode_cli_provider_settings_round_trip() {
+    let mut provider = AgentProvider::new_empty();
+    provider.kind = AgentProviderKind::OpenCodeCli;
+    provider.cli_executable = Some(PathBuf::from("/opt/homebrew/bin/opencode"));
+    provider.models = vec![AgentProviderModel::from_id("openai/gpt-5".to_owned())];
+
+    let serialized = toml::to_string(&provider).expect("provider should serialize");
+    let restored: AgentProvider = toml::from_str(&serialized).expect("provider should deserialize");
+
+    assert_eq!(restored, provider);
+    assert!(restored.base_url.is_empty());
+}
+
+#[test]
+fn old_agent_provider_settings_default_to_http_kind_and_no_cli_executable() {
+    let provider: AgentProvider = toml::from_str(
+        r#"
+        id = "test-id"
+        name = "Test Provider"
+        base_url = "https://api.example.com/v1"
+    "#,
+    )
+    .expect("legacy provider should deserialize");
+
+    assert_eq!(provider.kind, AgentProviderKind::OpenAiCompatible);
+    assert_eq!(provider.cli_executable, None);
+}
+
+#[test]
 fn extra_headers_skip_when_empty() {
     let provider = AgentProvider {
         id: "test-id".to_string(),
@@ -769,6 +799,7 @@ fn extra_headers_skip_when_empty() {
         base_url: "https://api.example.com/v1".to_string(),
         models: Vec::new(),
         extra_headers: Vec::new(),
+        cli_executable: None,
     };
     let serialized = toml::to_string(&provider).expect("should serialize");
     assert!(

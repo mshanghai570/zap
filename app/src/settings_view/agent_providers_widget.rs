@@ -41,7 +41,9 @@ use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
-use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
+use crate::settings::{
+    AISettings, AgentProvider, AgentProviderApiType, AgentProviderKind, AgentProviderModel,
+};
 use strum::IntoEnumIterator;
 
 use super::ai_page::{AISettingsPageAction, AISettingsPageView, ModelCapabilityKind};
@@ -116,7 +118,9 @@ struct HeaderRow {
 
 /// 一条 provider 行的所有可编辑 view handle。
 struct ProviderRow {
+    provider_kind: AgentProviderKind,
     name_editor: ViewHandle<EditorView>,
+    cli_executable_editor: ViewHandle<EditorView>,
     base_url_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
     fetch_button_state: MouseStateHandle,
@@ -128,6 +132,7 @@ struct ProviderRow {
     add_header_button_state: MouseStateHandle,
     /// 5 个 ApiType chip 各自的鼠标状态。HashMap 由 chip 显示名映射。
     api_type_chip_states: RefCell<HashMap<AgentProviderApiType, MouseStateHandle>>,
+    kind_chip_states: RefCell<HashMap<AgentProviderKind, MouseStateHandle>>,
     model_rows: Vec<ModelRow>,
 }
 
@@ -142,7 +147,9 @@ type ModelDraftEditorHandles = (
 #[derive(Clone)]
 struct ProviderDraftEditors {
     provider_id: String,
+    provider_kind: AgentProviderKind,
     name_editor: ViewHandle<EditorView>,
+    cli_executable_editor: ViewHandle<EditorView>,
     base_url_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
     header_editors: Vec<(ViewHandle<EditorView>, ViewHandle<EditorView>)>,
@@ -153,7 +160,9 @@ impl ProviderDraftEditors {
     fn from_row(provider_id: String, row: &ProviderRow) -> Self {
         Self {
             provider_id,
+            provider_kind: row.provider_kind,
             name_editor: row.name_editor.clone(),
+            cli_executable_editor: row.cli_executable_editor.clone(),
             base_url_editor: row.base_url_editor.clone(),
             api_key_editor: row.api_key_editor.clone(),
             header_editors: row
@@ -181,10 +190,19 @@ impl ProviderDraftEditors {
     fn to_save_action(&self, app: &AppContext) -> AISettingsPageAction {
         self.to_save_action_with(
             app,
-            |provider_id, name, base_url, api_key, headers, models| {
+            |provider_id,
+             provider_kind,
+             name,
+             cli_executable,
+             base_url,
+             api_key,
+             headers,
+             models| {
                 AISettingsPageAction::SaveAgentProviderEdits {
                     provider_id,
+                    provider_kind,
                     name,
+                    cli_executable,
                     base_url,
                     api_key,
                     headers,
@@ -201,10 +219,19 @@ impl ProviderDraftEditors {
     ) -> AISettingsPageAction {
         self.to_save_action_with(
             app,
-            |provider_id, name, base_url, api_key, headers, models| {
+            |provider_id,
+             provider_kind,
+             name,
+             cli_executable,
+             base_url,
+             api_key,
+             headers,
+             models| {
                 AISettingsPageAction::SaveAgentProviderEditsThen {
                     provider_id,
+                    provider_kind,
                     name,
+                    cli_executable,
                     base_url,
                     api_key,
                     headers,
@@ -220,6 +247,8 @@ impl ProviderDraftEditors {
         app: &AppContext,
         build: impl FnOnce(
             String,
+            AgentProviderKind,
+            String,
             String,
             String,
             String,
@@ -228,6 +257,7 @@ impl ProviderDraftEditors {
         ) -> AISettingsPageAction,
     ) -> AISettingsPageAction {
         let name = self.name_editor.as_ref(app).buffer_text(app);
+        let cli_executable = self.cli_executable_editor.as_ref(app).buffer_text(app);
         let base_url = self.base_url_editor.as_ref(app).buffer_text(app);
         let api_key = self.api_key_editor.as_ref(app).buffer_text(app);
         let headers: Vec<(String, String)> = self
@@ -254,7 +284,9 @@ impl ProviderDraftEditors {
 
         build(
             self.provider_id.clone(),
+            self.provider_kind,
             name,
+            cli_executable,
             base_url,
             api_key,
             headers,
@@ -324,6 +356,7 @@ impl AgentProvidersWidget {
     /// 构造单条模型行的 EditorView 与订阅。
     fn build_model_row(
         model: &AgentProviderModel,
+        provider_kind: AgentProviderKind,
         ctx: &mut ViewContext<AISettingsPageView>,
     ) -> ModelRow {
         // ---- name 编辑器 ----
@@ -352,10 +385,15 @@ impl AgentProvidersWidget {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
             let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text(
-                crate::t!("settings-agent-providers-model-id-placeholder"),
-                ctx,
-            );
+            let placeholder = match provider_kind {
+                AgentProviderKind::OpenAiCompatible => {
+                    crate::t!("settings-agent-providers-model-id-placeholder")
+                }
+                AgentProviderKind::OpenCodeCli => {
+                    crate::t!("settings-agent-providers-cli-model-id-placeholder")
+                }
+            };
+            editor.set_placeholder_text(placeholder, ctx);
             if !initial_id.is_empty() {
                 editor.set_buffer_text(&initial_id, ctx);
             }
@@ -498,6 +536,29 @@ impl AgentProvidersWidget {
             collapse_selection_if_blurred(&editor, event, ctx);
         });
 
+        // ---- OpenCode CLI executable 编辑器 ----
+        let initial_cli_executable = provider
+            .cli_executable
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let cli_executable_editor = ctx.add_typed_action_view(move |ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = single_line_editor_options(appearance, false);
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text(
+                crate::t!("settings-agent-providers-cli-executable-placeholder"),
+                ctx,
+            );
+            if !initial_cli_executable.is_empty() {
+                editor.set_buffer_text(&initial_cli_executable, ctx);
+            }
+            editor
+        });
+        ctx.subscribe_to_view(&cli_executable_editor, move |_, editor, event, ctx| {
+            collapse_selection_if_blurred(&editor, event, ctx);
+        });
+
         // ---- Base URL 编辑器 ----
         let initial_base_url = provider.base_url.clone();
         let base_url_editor = ctx.add_typed_action_view(move |ctx| {
@@ -543,7 +604,7 @@ impl AgentProvidersWidget {
         let model_rows: Vec<ModelRow> = provider
             .models
             .iter()
-            .map(|m| Self::build_model_row(m, ctx))
+            .map(|m| Self::build_model_row(m, provider.kind, ctx))
             .collect();
 
         let header_rows: Vec<HeaderRow> = provider
@@ -554,7 +615,9 @@ impl AgentProvidersWidget {
         let add_header_button_state = MouseStateHandle::default();
 
         ProviderRow {
+            provider_kind: provider.kind,
             name_editor,
+            cli_executable_editor,
             base_url_editor,
             api_key_editor,
             fetch_button_state: MouseStateHandle::default(),
@@ -565,8 +628,72 @@ impl AgentProvidersWidget {
             header_rows,
             add_header_button_state,
             api_type_chip_states: RefCell::new(HashMap::new()),
+            kind_chip_states: RefCell::new(HashMap::new()),
             model_rows,
         }
+    }
+
+    fn render_provider_kind_field(
+        &self,
+        provider: &AgentProvider,
+        row: &ProviderRow,
+        draft_editors: ProviderDraftEditors,
+        label_color: warp_core::ui::theme::Fill,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let label_text = Container::new(
+            Text::new(
+                crate::t!("settings-agent-providers-field-kind"),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(label_color.into())
+            .finish(),
+        )
+        .with_margin_top(FIELD_LABEL_MARGIN_TOP)
+        .with_margin_bottom(FIELD_LABEL_MARGIN_BOTTOM)
+        .finish();
+
+        let mut chip_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        {
+            let mut states = row.kind_chip_states.borrow_mut();
+            for kind in [
+                AgentProviderKind::OpenAiCompatible,
+                AgentProviderKind::OpenCodeCli,
+            ] {
+                let state = states.entry(kind).or_default().clone();
+                let label = match kind {
+                    AgentProviderKind::OpenAiCompatible => {
+                        crate::t!("settings-agent-providers-kind-openai-compatible")
+                    }
+                    AgentProviderKind::OpenCodeCli => {
+                        crate::t!("settings-agent-providers-kind-opencode-cli")
+                    }
+                };
+                let label = if provider.kind == kind {
+                    format!("● {label}")
+                } else {
+                    label
+                };
+                let chip = Self::render_card_button_preserving_draft(
+                    label,
+                    state,
+                    draft_editors.clone(),
+                    AISettingsPageAction::SetAgentProviderKind {
+                        provider_id: provider.id.clone(),
+                        kind,
+                    },
+                    appearance,
+                );
+                chip_row = chip_row.with_child(Container::new(chip).with_margin_right(6.).finish());
+            }
+        }
+
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(label_text)
+            .with_child(chip_row.finish())
+            .finish()
     }
 
     /// 渲染 "API Type" 行:5 个 chip 横排,当前选中的高亮显示。
@@ -981,6 +1108,8 @@ impl AgentProvidersWidget {
             }
         };
         let draft_editors = ProviderDraftEditors::from_row(provider.id.clone(), row);
+        let is_opencode_cli = provider.kind == AgentProviderKind::OpenCodeCli;
+        let show_provider_kind_selector = cfg!(all(target_os = "macos", target_arch = "x86_64"));
 
         let name_field = field_block(
             &crate::t!("settings-agent-providers-field-name"),
@@ -988,6 +1117,17 @@ impl AgentProvidersWidget {
             label_color,
             appearance,
         );
+        let provider_kind_field = if show_provider_kind_selector {
+            Some(self.render_provider_kind_field(
+                provider,
+                row,
+                draft_editors.clone(),
+                label_color,
+                appearance,
+            ))
+        } else {
+            None
+        };
         let api_type_field = self.render_api_type_field(
             provider,
             row,
@@ -995,6 +1135,24 @@ impl AgentProvidersWidget {
             label_color,
             appearance,
         );
+        let cli_executable_field = field_block(
+            &crate::t!("settings-agent-providers-field-cli-executable"),
+            ChildView::new(&row.cli_executable_editor).finish(),
+            label_color,
+            appearance,
+        );
+        let cli_help = Container::new(
+            Text::new(
+                crate::t!("settings-agent-providers-cli-help"),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().disabled_ui_text_color().into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_top(2.)
+        .finish();
         let base_url_field = field_block(
             &crate::t!("settings-agent-providers-field-base-url"),
             ChildView::new(&row.base_url_editor).finish(),
@@ -1097,9 +1255,14 @@ impl AgentProvidersWidget {
             .with_child(models_label);
 
         if provider.models.is_empty() {
+            let empty_hint = if is_opencode_cli {
+                crate::t!("settings-agent-providers-cli-models-empty-hint")
+            } else {
+                crate::t!("settings-agent-providers-models-empty-hint")
+            };
             let empty_hint = Container::new(
                 Text::new(
-                    crate::t!("settings-agent-providers-models-empty-hint"),
+                    empty_hint,
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -1260,21 +1423,23 @@ impl AgentProvidersWidget {
                 .finish()
         };
 
+        let mut provider_controls = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Container::new(add_model_button)
+                    .with_margin_right(8.)
+                    .finish(),
+            );
+        if !is_opencode_cli {
+            provider_controls = provider_controls
+                .with_child(Container::new(fetch_button).with_margin_right(8.).finish())
+                .with_child(sync_models_dev_button);
+        }
+
         let bottom_row = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(
-                        Container::new(add_model_button)
-                            .with_margin_right(8.)
-                            .finish(),
-                    )
-                    .with_child(Container::new(fetch_button).with_margin_right(8.).finish())
-                    .with_child(sync_models_dev_button)
-                    .finish(),
-            )
+            .with_child(provider_controls.finish())
             .with_child(
                 Container::new(
                     Flex::row()
@@ -1293,31 +1458,38 @@ impl AgentProvidersWidget {
         // 用透明 detail_color 触发它被读取(避免 unused 警告);仅用于潜在配色。
         let _ = detail_color;
 
-        Container::new(
-            Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_child(name_field)
-                .with_child(api_type_field)
-                .with_child(base_url_field)
-                .with_child(api_key_field)
-                .with_child(
-                    Container::new(headers_column.finish())
-                        .with_margin_top(8.)
-                        .finish(),
-                )
-                .with_child(
-                    Container::new(models_column.finish())
-                        .with_margin_top(8.)
-                        .finish(),
-                )
-                .with_child(Container::new(bottom_row).with_margin_top(10.).finish())
+        let mut provider_fields =
+            Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        if let Some(provider_kind_field) = provider_kind_field {
+            provider_fields.add_child(provider_kind_field);
+        }
+        provider_fields.add_child(name_field);
+        if is_opencode_cli {
+            provider_fields.add_child(cli_executable_field);
+            provider_fields.add_child(cli_help);
+        } else {
+            provider_fields.add_child(api_type_field);
+            provider_fields.add_child(base_url_field);
+            provider_fields.add_child(api_key_field);
+            provider_fields.add_child(
+                Container::new(headers_column.finish())
+                    .with_margin_top(8.)
+                    .finish(),
+            );
+        }
+        provider_fields.add_child(
+            Container::new(models_column.finish())
+                .with_margin_top(8.)
                 .finish(),
-        )
-        .with_background(appearance.theme().surface_1())
-        .with_uniform_padding(12.)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-        .with_margin_bottom(8.)
-        .finish()
+        );
+        provider_fields.add_child(Container::new(bottom_row).with_margin_top(10.).finish());
+
+        Container::new(provider_fields.finish())
+            .with_background(appearance.theme().surface_1())
+            .with_uniform_padding(12.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_margin_bottom(8.)
+            .finish()
     }
 }
 
@@ -1597,7 +1769,7 @@ impl SettingsWidget for AgentProvidersWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "agent provider providers custom openai compatible deepseek glm moonshot dashscope qwen ollama base url api key models save 提供商 自定义 模型 保存"
+        "agent provider providers custom openai compatible opencode cli executable deepseek glm moonshot dashscope qwen ollama base url api key models save 提供商 自定义 模型 保存"
     }
 
     fn render(

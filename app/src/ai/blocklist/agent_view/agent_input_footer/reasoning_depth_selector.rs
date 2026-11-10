@@ -30,7 +30,7 @@ use crate::{
     context_chips::display_menu::{
         ChipMenuType, DisplayChipMenu, GenericMenuItem, PromptDisplayMenuEvent,
     },
-    settings::{AgentProviderApiType, ReasoningEffortSetting},
+    settings::{AgentProviderApiType, AgentProviderKind, ReasoningEffortSetting},
     terminal::input::{MenuPositioning, MenuPositioningProvider},
     ui_components::icons::Icon,
     view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize},
@@ -202,6 +202,9 @@ impl ReasoningDepthSelector {
             .id
             .clone();
         let (provider, _api_key, model_id) = crate::ai::agent_providers::lookup_byop(ctx, &llm_id)?;
+        if provider.kind != AgentProviderKind::OpenAiCompatible {
+            return None;
+        }
         Some((provider.api_type, model_id))
     }
 

@@ -2127,7 +2127,9 @@ impl AISettingsPageView {
 
     fn save_agent_provider_edits(
         provider_id: &str,
+        provider_kind: crate::settings::AgentProviderKind,
         name: &str,
+        cli_executable: &str,
         base_url: &str,
         api_key: &str,
         headers: &[(String, String)],
@@ -2137,7 +2139,13 @@ impl AISettingsPageView {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
             let mut providers = settings.agent_providers.value().clone();
             if let Some(p) = providers.iter_mut().find(|p| p.id == provider_id) {
+                p.kind = provider_kind;
                 p.name = name.to_owned();
+                p.cli_executable = if cli_executable.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(cli_executable))
+                };
                 p.base_url = base_url.to_owned();
                 p.extra_headers = headers.to_vec();
                 // 按 model_index 更新，跳过越界索引（rebuild 中间表单与 settings 可能短暂不一致）。
@@ -2155,7 +2163,12 @@ impl AISettingsPageView {
         crate::ai::agent_providers::AgentProviderSecrets::handle(ctx).update(
             ctx,
             |secrets, ctx| {
-                secrets.set(provider_id, api_key.to_owned(), ctx);
+                let api_key = if provider_kind == crate::settings::AgentProviderKind::OpenCodeCli {
+                    String::new()
+                } else {
+                    api_key.to_owned()
+                };
+                secrets.set(provider_id, api_key, ctx);
             },
         );
     }
@@ -2272,6 +2285,10 @@ pub enum AISettingsPageAction {
         provider_id: String,
         name: String,
     },
+    SetAgentProviderKind {
+        provider_id: String,
+        kind: crate::settings::AgentProviderKind,
+    },
     UpdateAgentProviderBaseUrl {
         provider_id: String,
         base_url: String,
@@ -2291,7 +2308,9 @@ pub enum AISettingsPageAction {
     /// settings_view 点"保存"按钮后一起下发。
     SaveAgentProviderEdits {
         provider_id: String,
+        provider_kind: crate::settings::AgentProviderKind,
         name: String,
+        cli_executable: String,
         base_url: String,
         api_key: String,
         headers: Vec<(String, String)>,
@@ -2301,7 +2320,9 @@ pub enum AISettingsPageAction {
     },
     SaveAgentProviderEditsThen {
         provider_id: String,
+        provider_kind: crate::settings::AgentProviderKind,
         name: String,
+        cli_executable: String,
         base_url: String,
         api_key: String,
         headers: Vec<(String, String)>,
@@ -3107,6 +3128,25 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::SetAgentProviderKind { provider_id, kind } => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
+                        p.kind = *kind;
+                        if *kind == crate::settings::AgentProviderKind::OpenAiCompatible
+                            && p.base_url.trim().is_empty()
+                        {
+                            p.base_url = p.api_type.default_base_url().to_owned();
+                        }
+                    }
+                    let _ = settings.agent_providers.set_value(providers, ctx);
+                });
+                if *kind == crate::settings::AgentProviderKind::OpenCodeCli {
+                    crate::ai::agent_providers::AgentProviderSecrets::handle(ctx)
+                        .update(ctx, |secrets, ctx| secrets.remove(provider_id, ctx));
+                }
+                self.rebuild_current_page(ctx);
+            }
             AISettingsPageAction::UpdateAgentProviderBaseUrl {
                 provider_id,
                 base_url,
@@ -3152,7 +3192,9 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::SaveAgentProviderEdits {
                 provider_id,
+                provider_kind,
                 name,
+                cli_executable,
                 base_url,
                 api_key,
                 headers,
@@ -3160,7 +3202,9 @@ impl TypedActionView for AISettingsPageView {
             } => {
                 Self::save_agent_provider_edits(
                     provider_id,
+                    *provider_kind,
                     name,
+                    cli_executable,
                     base_url,
                     api_key,
                     headers,
@@ -3171,7 +3215,9 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::SaveAgentProviderEditsThen {
                 provider_id,
+                provider_kind,
                 name,
+                cli_executable,
                 base_url,
                 api_key,
                 headers,
@@ -3180,7 +3226,9 @@ impl TypedActionView for AISettingsPageView {
             } => {
                 Self::save_agent_provider_edits(
                     provider_id,
+                    *provider_kind,
                     name,
+                    cli_executable,
                     base_url,
                     api_key,
                     headers,

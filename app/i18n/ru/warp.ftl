@@ -1510,7 +1510,7 @@ settings-update-environment-description-placeholder = например, это �
 # 此锚点下放 settings_view/agent_providers_widget.rs 字符串
 # 命名前缀:settings-agent-providers-*
 settings-agent-providers-title = Провайдеры агентов
-settings-agent-providers-description = Настройте собственные провайдеры агентов для разных протоколов — OpenAI-совместимые (DeepSeek, Zhipu GLM, Moonshot, DashScope, SiliconFlow, OpenRouter и другие), Anthropic, Gemini и локальный Ollama. Модели можно добавлять вручную (сопоставление отображаемого имени и ID модели) или получать автоматически из API. Метаданные провайдеров хранятся в локальном файле settings.toml; ключи API надежно хранятся в системном хранилище ключей.
+settings-agent-providers-description = Настройте собственные провайдеры агентов для HTTP API (OpenAI-совместимые, Anthropic, Gemini, локальный Ollama и другие) или OpenCode CLI. Модели HTTP можно добавлять вручную или получать из API; ID моделей OpenCode вводятся вручную, аутентификация выполняется самим OpenCode. Метаданные провайдеров хранятся в локальном файле settings.toml; ключи API надежно хранятся в системном хранилище ключей.
 settings-agent-providers-empty = Провайдеры еще не настроены. Нажмите [+ Добавить провайдера] в правом верхнем углу, чтобы добавить нового.
 settings-agent-providers-add-button = + Добавить провайдера
 settings-agent-providers-search-placeholder = Поиск провайдеров…
@@ -1524,6 +1524,14 @@ settings-agent-providers-collapse = Свернуть ▲
 settings-agent-providers-expand-remaining = Развернуть оставшиеся { $count } ▼
 settings-agent-providers-row-missing = (для этого провайдера пока не привязаны редакторы: { $id })
 settings-agent-providers-field-name = Название
+settings-agent-providers-field-kind = Тип провайдера
+settings-agent-providers-kind-openai-compatible = Совместимый с OpenAI API
+settings-agent-providers-kind-opencode-cli = OpenCode CLI
+settings-agent-providers-field-cli-executable = Путь к исполняемому файлу
+settings-agent-providers-cli-executable-placeholder = opencode
+settings-agent-providers-cli-help = Используется локальная аутентификация OpenCode; Zap не хранит учетные данные. Добавляйте ID моделей вручную. Если путь пуст, используется `opencode` из PATH.
+settings-agent-providers-cli-model-id-placeholder = ID модели, передаваемый в `opencode run --model`
+settings-agent-providers-cli-models-empty-hint = Модели еще не настроены. Нажмите [+ Добавить модель], чтобы вручную добавить ID модели OpenCode.
 settings-agent-providers-field-base-url = Базовый URL
 settings-agent-providers-field-api-key = Ключ API
 settings-agent-providers-field-api-type = Тип API

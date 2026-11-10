@@ -22,7 +22,9 @@ use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 use super::chat_stream;
 use crate::ai::llms::LLMPreferences;
-use crate::settings::{AgentProviderApiType, ReasoningEffortSetting};
+use crate::settings::{
+    AgentProvider, AgentProviderApiType, AgentProviderKind, ReasoningEffortSetting,
+};
 
 /// BYOP one-shot 请求所需的 provider/model 信息。
 #[derive(Debug, Clone)]
@@ -32,6 +34,25 @@ pub struct OneshotConfig {
     pub model_id: String,
     pub api_type: AgentProviderApiType,
     pub reasoning_effort: ReasoningEffortSetting,
+}
+
+fn oneshot_config_for_provider(
+    provider: &AgentProvider,
+    api_key: String,
+    model_id: String,
+    reasoning_effort: ReasoningEffortSetting,
+) -> Option<OneshotConfig> {
+    if provider.kind != AgentProviderKind::OpenAiCompatible {
+        return None;
+    }
+
+    Some(OneshotConfig {
+        base_url: provider.base_url.clone(),
+        api_key,
+        model_id,
+        api_type: provider.api_type,
+        reasoning_effort,
+    })
 }
 
 /// One-shot 调用的可选参数。
@@ -166,15 +187,12 @@ pub fn resolve_active_ai_oneshot(
         .id
         .clone();
     let (provider, api_key, model_id) = super::lookup_byop(app, &id)?;
+    if provider.kind != AgentProviderKind::OpenAiCompatible {
+        return None;
+    }
     let reasoning_effort =
         llm_prefs.get_reasoning_effort(terminal_view_id, provider.api_type, &model_id);
-    Some(OneshotConfig {
-        base_url: provider.base_url,
-        api_key,
-        model_id,
-        api_type: provider.api_type,
-        reasoning_effort,
-    })
+    oneshot_config_for_provider(&provider, api_key, model_id, reasoning_effort)
 }
 
 /// 解析当前 active profile 的 `next_command_model`(fallback 到 `base_model`),
@@ -189,13 +207,29 @@ pub fn resolve_next_command_oneshot(
         .id
         .clone();
     let (provider, api_key, model_id) = super::lookup_byop(app, &id)?;
+    if provider.kind != AgentProviderKind::OpenAiCompatible {
+        return None;
+    }
     let reasoning_effort =
         llm_prefs.get_reasoning_effort(terminal_view_id, provider.api_type, &model_id);
-    Some(OneshotConfig {
-        base_url: provider.base_url,
-        api_key,
-        model_id,
-        api_type: provider.api_type,
-        reasoning_effort,
-    })
+    oneshot_config_for_provider(&provider, api_key, model_id, reasoning_effort)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opencode_provider_is_rejected_by_http_oneshot_config() {
+        let mut provider = AgentProvider::new_empty();
+        provider.kind = AgentProviderKind::OpenCodeCli;
+
+        assert!(oneshot_config_for_provider(
+            &provider,
+            String::new(),
+            "openai/gpt-5".to_owned(),
+            ReasoningEffortSetting::Auto,
+        )
+        .is_none());
+    }
 }

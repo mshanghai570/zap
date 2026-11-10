@@ -17,6 +17,7 @@ pub mod llm_id;
 pub mod models_dev;
 pub mod oneshot;
 pub mod openai_compatible;
+pub mod opencode_cli;
 pub mod prompt_renderer;
 pub mod reasoning;
 pub mod secrets;
@@ -52,22 +53,25 @@ use crate::ai::llms::{
     AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMProvider, LLMUsageMetadata,
     ModelsByFeature,
 };
-use crate::settings::{AISettings, AgentProvider};
+use crate::settings::{AISettings, AgentProvider, AgentProviderKind};
 
 /// 合成给定 provider 的所有合法 (provider, model) 对的 LLMInfo 列表。
 ///
-/// "合法" = provider 有非空 base_url + 至少 1 个 model。
+/// HTTP provider 需要非空 base_url;OpenCode CLI provider 不需要 endpoint。二者都需要模型。
 /// **API key 可选**:本地无认证 provider(ollama / lm-studio / vllm 等)允许留空,
 /// 缺 key 时仍然把模型暴露给 picker;运行时仍会发请求,只是不带 `Authorization`。
-/// 不合法的 provider(没填 base_url 或没模型)会整体被忽略,picker 中不展示其下的模型,
-/// 这样用户能直观地看到"哪些 provider 没填全 → 没出现"。
-fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
+/// 不合法的 provider(HTTP provider 没填 base_url 或任一 provider 没有模型)会整体被忽略。
+fn build_byop_llm_infos(app: &AppContext, include_opencode_cli: bool) -> Vec<LLMInfo> {
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
     let mut out = Vec::new();
 
     for provider in providers {
-        if provider.base_url.trim().is_empty() {
-            continue;
+        match provider.kind {
+            AgentProviderKind::OpenAiCompatible if provider.base_url.trim().is_empty() => {
+                continue;
+            }
+            AgentProviderKind::OpenCodeCli if !include_opencode_cli => continue,
+            AgentProviderKind::OpenAiCompatible | AgentProviderKind::OpenCodeCli => {}
         }
         if provider.models.is_empty() {
             continue;
@@ -144,25 +148,36 @@ fn placeholder_llm_info() -> LLMInfo {
 }
 
 /// 构造一个完全由 BYOP 模型填充的 `ModelsByFeature`。
-/// 4 个 feature(agent_mode / coding / cli_agent / computer_use)使用同一份模型集合 —
-/// 自定义 provider 不区分 capability,所有模型都能用作任意 feature。
 pub fn build_byop_models_by_feature(app: &AppContext) -> ModelsByFeature {
-    let mut choices = build_byop_llm_infos(app);
-    if choices.is_empty() {
-        choices.push(placeholder_llm_info());
+    build_byop_models_by_feature_for_target(
+        app,
+        cfg!(all(target_os = "macos", target_arch = "x86_64")),
+    )
+}
+
+fn build_byop_models_by_feature_for_target(
+    app: &AppContext,
+    include_opencode_cli: bool,
+) -> ModelsByFeature {
+    let mut agent_mode_choices = build_byop_llm_infos(app, include_opencode_cli);
+    let mut http_choices = build_byop_llm_infos(app, false);
+    if agent_mode_choices.is_empty() {
+        agent_mode_choices.push(placeholder_llm_info());
+    }
+    if http_choices.is_empty() {
+        http_choices.push(placeholder_llm_info());
     }
 
-    let default_id = choices[0].id.clone();
-    let make = || {
-        AvailableLLMs::new(default_id.clone(), choices.clone(), None)
-            .expect("choices is non-empty by construction")
+    let make = |choices: Vec<LLMInfo>| {
+        let default_id = choices[0].id.clone();
+        AvailableLLMs::new(default_id, choices, None).expect("choices is non-empty by construction")
     };
 
     ModelsByFeature {
-        agent_mode: make(),
-        coding: make(),
-        cli_agent: Some(make()),
-        computer_use: Some(make()),
+        agent_mode: make(agent_mode_choices),
+        coding: make(http_choices.clone()),
+        cli_agent: Some(make(http_choices.clone())),
+        computer_use: Some(make(http_choices)),
     }
 }
 

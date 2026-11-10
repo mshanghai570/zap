@@ -31,6 +31,8 @@ pub(super) struct PendingTitleGeneration {
 }
 
 struct ByopDispatch {
+    kind: crate::settings::AgentProviderKind,
+    cli_executable: Option<std::path::PathBuf>,
     base_url: String,
     api_key: String,
     model_id: String,
@@ -61,6 +63,66 @@ struct ByopDispatch {
     /// ユーザー設定 (image/pdf/audio 三態 Override) を反映済みの attachment caps。
     /// `resolve_for_model` で計算。UI 表示と runtime 動作が同じ caps を参照する。
     attachment_caps: crate::ai::agent_providers::attachment_caps::AttachmentCaps,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ByopGenerator {
+    Http,
+    OpenCodeCli,
+}
+
+fn byop_generator_for(kind: crate::settings::AgentProviderKind) -> ByopGenerator {
+    match kind {
+        crate::settings::AgentProviderKind::OpenAiCompatible => ByopGenerator::Http,
+        crate::settings::AgentProviderKind::OpenCodeCli => ByopGenerator::OpenCodeCli,
+    }
+}
+
+async fn generate_byop_response_stream(
+    params: api::RequestParams,
+    byop: ByopDispatch,
+    cancellation_rx: oneshot::Receiver<()>,
+) -> Result<api::ResponseStream, ConvertToAPITypeError> {
+    match byop_generator_for(byop.kind) {
+        ByopGenerator::Http => {
+            crate::ai::agent_providers::chat_stream::generate_byop_output(
+                crate::ai::agent_providers::chat_stream::ByopOutputInput {
+                    params,
+                    base_url: byop.base_url,
+                    api_key: byop.api_key,
+                    model_id: byop.model_id,
+                    api_type: byop.api_type,
+                    reasoning_effort: byop.reasoning_effort,
+                    extra_headers: byop.extra_headers,
+                    task_id: byop.root_task_id,
+                    target_task_id: byop.target_task_id,
+                    needs_create_task: byop.needs_create_task,
+                    lrc_command_id: byop.lrc_command_id,
+                    lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
+                    context_window: byop.context_window,
+                    cancellation_rx,
+                    attachment_caps: byop.attachment_caps,
+                },
+            )
+            .await
+        }
+        ByopGenerator::OpenCodeCli => {
+            crate::ai::agent_providers::chat_stream::generate_opencode_output(
+                crate::ai::agent_providers::chat_stream::OpenCodeOutputInput {
+                    params,
+                    executable: byop
+                        .cli_executable
+                        .unwrap_or_else(|| std::path::PathBuf::from("opencode")),
+                    model_id: byop.model_id,
+                    task_id: byop.root_task_id,
+                    target_task_id: byop.target_task_id,
+                    needs_create_task: byop.needs_create_task,
+                    cancellation_rx,
+                },
+            )
+            .await
+        }
+    }
 }
 
 /// 标题生成专用的 BYOP 配置(可能与主 base 模型同 provider 也可能不同)。
@@ -107,8 +169,11 @@ fn byop_dispatch_info(
     let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
     let title_gen = if needs_create_task {
         let title_id = llm_prefs.get_active_title_model(ctx, None).id.clone();
-        crate::ai::agent_providers::lookup_byop(ctx, &title_id).map(
-            |(t_provider, t_api_key, t_model_id)| {
+        crate::ai::agent_providers::lookup_byop(ctx, &title_id)
+            .filter(|(provider, _, _)| {
+                provider.kind == crate::settings::AgentProviderKind::OpenAiCompatible
+            })
+            .map(|(t_provider, t_api_key, t_model_id)| {
                 let t_effort =
                     llm_prefs.get_reasoning_effort(None, t_provider.api_type, &t_model_id);
                 TitleGenParams {
@@ -118,13 +183,17 @@ fn byop_dispatch_info(
                     api_type: t_provider.api_type,
                     reasoning_effort: t_effort,
                 }
-            },
-        )
+            })
     } else {
         None
     };
 
-    let reasoning_effort = llm_prefs.get_reasoning_effort(None, provider.api_type, &model_id);
+    let reasoning_effort = if provider.kind == crate::settings::AgentProviderKind::OpenAiCompatible
+    {
+        llm_prefs.get_reasoning_effort(None, provider.api_type, &model_id)
+    } else {
+        crate::settings::ReasoningEffortSetting::Auto
+    };
     let attachment_caps = provider
         .models
         .iter()
@@ -144,6 +213,8 @@ fn byop_dispatch_info(
             crate::ai::agent_providers::attachment_caps::caps_for(provider.api_type, &model_id)
         });
     Some(ByopDispatch {
+        kind: provider.kind,
+        cli_executable: provider.cli_executable,
         base_url: provider.base_url,
         api_key,
         model_id,
@@ -159,6 +230,13 @@ fn byop_dispatch_info(
         context_window,
         attachment_caps,
     })
+}
+
+fn is_retryable_for_provider(
+    error: &AIApiError,
+    provider_kind: Option<crate::settings::AgentProviderKind>,
+) -> bool {
+    provider_kind != Some(crate::settings::AgentProviderKind::OpenCodeCli) && error.is_retryable()
 }
 
 fn pending_title_generation_from_byop(
@@ -214,10 +292,11 @@ impl ResponseStreamId {
 /// each response chunk.
 ///
 /// Handles retries internally - retries are only attempted if no ClientActions events have been
-/// received yet, ensuring we don't retry after the AI has started executing actions.
+/// received and the provider can be safely retried.
 pub struct ResponseStream {
     id: ResponseStreamId,
     params: api::RequestParams,
+    byop_provider_kind: Option<crate::settings::AgentProviderKind>,
     retry_count: usize,
     start_time: DateTime<Local>,
     time_to_latest_event: TimeDelta,
@@ -269,32 +348,14 @@ impl ResponseStream {
         // 则在 spawn 前从 ctx 中取出 (provider, api_key, model_id, root_task_id),
         // 走自定义 chat completions。否则走 warp 自家 multi-agent 端点(原有路径)。
         let byop_dispatch = byop_dispatch_info(&params, &ai_identifiers, ctx);
+        let byop_provider_kind = byop_dispatch.as_ref().map(|byop| byop.kind);
         let pending_title_generation = byop_dispatch
             .as_ref()
             .and_then(|byop| pending_title_generation_from_byop(&params, byop));
         let _ = ctx.spawn(
             async move {
                 if let Some(byop) = byop_dispatch {
-                    crate::ai::agent_providers::chat_stream::generate_byop_output(
-                        crate::ai::agent_providers::chat_stream::ByopOutputInput {
-                            params: params_clone,
-                            base_url: byop.base_url,
-                            api_key: byop.api_key,
-                            model_id: byop.model_id,
-                            api_type: byop.api_type,
-                            reasoning_effort: byop.reasoning_effort,
-                            extra_headers: byop.extra_headers,
-                            task_id: byop.root_task_id,
-                            target_task_id: byop.target_task_id,
-                            needs_create_task: byop.needs_create_task,
-                            lrc_command_id: byop.lrc_command_id,
-                            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
-                            context_window: byop.context_window,
-                            cancellation_rx,
-                            attachment_caps: byop.attachment_caps,
-                        },
-                    )
-                    .await
+                    generate_byop_response_stream(params_clone, byop, cancellation_rx).await
                 } else {
                     byop_required_response_stream(cancellation_rx).await
                 }
@@ -306,6 +367,7 @@ impl ResponseStream {
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
             params: params.clone(),
+            byop_provider_kind,
             start_time,
             time_to_latest_event: TimeDelta::seconds(0),
             cancellation_tx: Some(cancellation_tx),
@@ -383,26 +445,7 @@ impl ResponseStream {
         let _ = ctx.spawn(
             async move {
                 if let Some(byop) = byop_dispatch {
-                    crate::ai::agent_providers::chat_stream::generate_byop_output(
-                        crate::ai::agent_providers::chat_stream::ByopOutputInput {
-                            params,
-                            base_url: byop.base_url,
-                            api_key: byop.api_key,
-                            model_id: byop.model_id,
-                            api_type: byop.api_type,
-                            reasoning_effort: byop.reasoning_effort,
-                            extra_headers: byop.extra_headers,
-                            task_id: byop.root_task_id,
-                            target_task_id: byop.target_task_id,
-                            needs_create_task: byop.needs_create_task,
-                            lrc_command_id: byop.lrc_command_id,
-                            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
-                            context_window: byop.context_window,
-                            cancellation_rx,
-                            attachment_caps: byop.attachment_caps,
-                        },
-                    )
-                    .await
+                    generate_byop_response_stream(params, byop, cancellation_rx).await
                 } else {
                     byop_required_response_stream(cancellation_rx).await
                 }
@@ -527,7 +570,7 @@ impl ResponseStream {
                 const MAX_RETRIES: usize = 3;
                 let network_status = NetworkStatus::as_ref(ctx);
                 let is_online = network_status.is_online();
-                let is_retryable = e.is_retryable();
+                let is_retryable = is_retryable_for_provider(&e, self.byop_provider_kind);
 
                 let should_retry = !self.has_received_client_actions
                     && is_retryable
@@ -563,7 +606,7 @@ impl ResponseStream {
                     "MultiAgent request failed after {} retries: has_received_client_actions={}, is_retryable={}, is_online={is_online}",
                     self.retry_count,
                     self.has_received_client_actions,
-                    e.is_retryable()
+                    is_retryable
                 );
                 report_error!(anyhow!(e.clone()).context(format!(
                     "MultiAgent request failed after {} retries",
@@ -658,3 +701,7 @@ async fn byop_required_response_stream(
     .take_until(cancellation_rx);
     Ok(Box::pin(error_stream))
 }
+
+#[cfg(test)]
+#[path = "response_stream_tests.rs"]
+mod tests;

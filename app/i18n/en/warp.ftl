@@ -1510,7 +1510,7 @@ settings-update-environment-description-placeholder = e.g., this environment is 
 # 此锚点下放 settings_view/agent_providers_widget.rs 字符串
 # 命名前缀:settings-agent-providers-*
 settings-agent-providers-title = Agent providers
-settings-agent-providers-description = Configure custom Agent providers across multiple protocols — OpenAI-compatible (DeepSeek, Zhipu GLM, Moonshot, DashScope, SiliconFlow, OpenRouter, etc.), Anthropic, Gemini, and local Ollama. You can add models manually (display name + model ID mapping) or fetch them automatically from the API. Provider metadata is stored in the local settings.toml; API keys are stored securely in the system keychain.
+settings-agent-providers-description = Configure custom Agent providers across HTTP APIs — OpenAI-compatible (DeepSeek, Zhipu GLM, Moonshot, DashScope, SiliconFlow, OpenRouter, etc.), Anthropic, Gemini, and local Ollama — or OpenCode CLI. Add HTTP models manually or fetch them from the API; OpenCode model IDs are entered manually and use OpenCode's local authentication. Provider metadata is stored in the local settings.toml; API keys are stored securely in the system keychain.
 settings-agent-providers-empty = No providers configured yet. Click [+ Add provider] in the top-right to add one.
 settings-agent-providers-add-button = + Add provider
 settings-agent-providers-search-placeholder = Search providers…
@@ -1524,6 +1524,14 @@ settings-agent-providers-collapse = Collapse ▲
 settings-agent-providers-expand-remaining = Expand remaining { $count } ▼
 settings-agent-providers-row-missing = (no editors bound for this provider yet: { $id })
 settings-agent-providers-field-name = Name
+settings-agent-providers-field-kind = Provider kind
+settings-agent-providers-kind-openai-compatible = OpenAI-compatible API
+settings-agent-providers-kind-opencode-cli = OpenCode CLI
+settings-agent-providers-field-cli-executable = Executable path
+settings-agent-providers-cli-executable-placeholder = opencode
+settings-agent-providers-cli-help = Uses OpenCode's local authentication; Zap does not store credentials. Add model IDs manually. Leave the path empty to use `opencode` from PATH.
+settings-agent-providers-cli-model-id-placeholder = Model ID passed to `opencode run --model`
+settings-agent-providers-cli-models-empty-hint = No models configured yet. Click [+ Add model] to add an OpenCode model ID manually.
 settings-agent-providers-field-base-url = Base URL
 settings-agent-providers-field-api-key = API Key
 settings-agent-providers-field-api-type = API Type
